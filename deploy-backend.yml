@@ -1,0 +1,12 @@
+name: Deploy backend
+on:
+  push:
+    branches: [ main ]
+    paths: [ "backend/**", ".github/workflows/deploy-backend.yml" ]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy
+        run: |
+          curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
