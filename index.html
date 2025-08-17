@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BitBet • Sesja gry</title>
+  <style>
+    html,body{margin:0;padding:0;background:#0b0b10;color:#eaeaea;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:920px;margin:40px auto;padding:24px}
+    .card{background:#12121a;border:1px solid #1e1e2a;border-radius:14px;padding:20px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+    h1{font-size:28px;margin:0 0 8px}
+    .muted{color:#9aa0aa}
+    .row{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px}
+    button{border:0;border-radius:10px;padding:12px 16px;font-weight:600;cursor:pointer;background:#00e5a8;color:#0b0b10}
+    button.secondary{background:#1f2330;color:#eaeaea}
+    .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#1f2330;color:#cbd3dd;font-size:12px}
+    .warn{color:#ffcd57}
+    a.link{color:#7aa8ff;text-decoration:none}
+    .spacer{height:16px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="app">
+    <h1>BitBet • Ładowanie…</h1>
+    <p class="muted">Czekaj chwilę.</p>
+  </div>
+</div>
+
+<script>
+const API_BASE = "https://<TWÓJ_BACKEND>.onrender.com"; // <- PODMIEŃ
+const IDLE_MS = 5*60*1000; // 5 min po stronie frontu (backend też pilnuje)
+
+const el = sel => document.querySelector(sel);
+const app = el("#app");
+
+function parseSessionPath() {
+  // oczekujemy /s/<session_id>
+  const parts = location.pathname.split("/").filter(Boolean);
+  const sIdx = parts.indexOf("s");
+  if (sIdx === -1 || !parts[sIdx+1]) return null;
+  return parts[sIdx+1];
+}
+function getTokenFromHash() {
+  const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  return h.get("token");
+}
+function setView(html){ app.innerHTML = html; }
+
+async function api(path, method="GET", body=null, token=null) {
+  const headers = {"Content-Type":"application/json"};
+  if (token) headers["Authorization"] = "Bearer " + token;
+  const res = await fetch(API_BASE + path, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : null,
+    credentials: "omit",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(()=> "");
+    throw new Error(`${res.status} ${res.statusText} :: ${txt}`);
+  }
+  return res.json();
+}
+
+let token = null;
+let lastInteraction = Date.now();
+let hbTimer = null, idleTimer = null;
+
+function resetIdleTimer() {
+  lastInteraction = Date.now();
+}
+["mousemove","keydown","click","touchstart"].forEach(ev => {
+  window.addEventListener(ev, resetIdleTimer, {passive:true});
+});
+
+function startLoops() {
+  // HEARTBEAT co 30s
+  hbTimer = setInterval(async () => {
+    try { await api("/api/sessions/heartbeat", "POST", {}, token); }
+    catch(e){ endView("Sesja wygasła lub została zakończona."); clearInterval(hbTimer); clearInterval(idleTimer); }
+  }, 30000);
+
+  // KONTROLA BEZCZYNNOŚCI
+  idleTimer = setInterval(async () => {
+    if (Date.now() - lastInteraction > IDLE_MS) {
+      try { await api("/api/sessions/end", "POST", {}, token); } catch(_) {}
+      endView("Zakończono po 5 minutach bezczynności.");
+      clearInterval(hbTimer); clearInterval(idleTimer);
+    }
+  }, 5000);
+}
+
+function endView(msg) {
+  setView(`
+    <h1>Sesja zakończona</h1>
+    <p class="muted">${msg}</p>
+    <div class="spacer"></div>
+    <a class="link" href="/">Wróć na stronę główną</a>
+  `);
+}
+
+async function boot() {
+  const sid = parseSessionPath();
+  token = getTokenFromHash();
+
+  if (!sid || !token) {
+    setView(`<h1>Błędny link</h1><p class="muted">Użyj linku wygenerowanego przez bota.</p>`);
+    return;
+  }
+
+  try {
+    const info = await api("/api/me", "GET", null, token);
+    setView(`
+      <h1>BitBet • Sesja #<span class="badge">${sid}</span></h1>
+      <p class="muted">Jesteś połączony. Gra korzysta z Twojego balansu Discord.</p>
+      <div class="row">
+        <button id="end" class="secondary">Zakończ sesję</button>
+        <span class="badge warn">Bezczynność > 5 min zakończy sesję</span>
+      </div>
+      <div class="spacer"></div>
+      <!-- TU osadź swój UI gry (iframe/React/Canvas itp.) -->
+      <p class="muted">Przykładowy endpoint: <code>/api/me</code> zwraca ID usera i sesji.</p>
+    `);
+    el("#end").addEventListener("click", async () => {
+      try { await api("/api/sessions/end", "POST", {}, token); } catch(_) {}
+      endView("Zakończono na żądanie użytkownika.");
+    });
+
+    startLoops();
+  } catch(e) {
+    endView("Sesja nieważna.");
+  }
+}
+boot();
+</script>
+</body>
+</html>
